@@ -68,6 +68,14 @@
   .upload-label span{font-size:12px;color:var(--sub);margin-top:6px;}
   .tabbtn{flex:1;padding:8px;font-size:12px;font-weight:700;border-radius:8px;border:1px solid var(--border);background:#0F141E;color:var(--sub);cursor:pointer;}
   .tabbtn.active{background:var(--accent);color:#1A1505;border-color:var(--accent);}
+  .lanes{display:flex;flex-direction:column;gap:5px;}
+  .lane{display:flex;align-items:center;gap:6px;}
+  .lane-label{display:flex;align-items:center;gap:4px;width:96px;flex-shrink:0;font-size:11px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+  .lane-track{position:relative;flex:1;height:24px;background:#0F141E;border-radius:6px;border:1px solid var(--border);overflow:hidden;}
+  .goal-line{position:absolute;right:2%;top:0;bottom:0;width:2px;background:var(--accent);}
+  .goal-text{position:absolute;right:2%;top:-14px;font-size:9px;color:var(--accent);transform:translateX(50%);}
+  .horse-marker{position:absolute;top:2px;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;left:0%;transition:left 0.08s linear;}
+  .result-line{font-size:12px;line-height:1.8;}
 </style>
 </head>
 <body>
@@ -114,16 +122,15 @@ let state = {
   trackCondition: "不明",
   numSim: 10000,
   simResults: null,
+  raceOrder: null,
 };
 
 // ---------- モンテカルロ ----------
 function gumbel(){ const u = Math.random(); return -Math.log(-Math.log(u || 1e-12)); }
 
-function runMonteCarlo(horses, n, trackCondition){
-  const m = horses.length;
+function computeStrengths(horses, trackCondition){
   const condKey = APTITUDE_FACTOR[trackCondition] ? trackCondition : "不明";
   const factorTable = APTITUDE_FACTOR[condKey];
-
   const strengths = horses.map(h => {
     const oddsForSim = (h.finalOdds && h.finalOdds > 0) ? h.finalOdds : h.odds;
     let s = 1 / Math.max(oddsForSim, 0.1);
@@ -133,7 +140,96 @@ function runMonteCarlo(horses, n, trackCondition){
     return s;
   });
   const total = strengths.reduce((a,b)=>a+b,0);
-  const logS = strengths.map(s => Math.log(s/total));
+  return strengths.map(s => Math.log(s/total));
+}
+
+function getCleanedHorses(){
+  return state.horses.map(h=>({
+    ...h,
+    odds: Number(h.odds)>0 ? Number(h.odds) : 100,
+    finalOdds: Number(h.finalOdds)>0 ? Number(h.finalOdds) : null,
+  }));
+}
+
+function sampleOneOrder(){
+  const horses = getCleanedHorses();
+  const logS = computeStrengths(horses, state.trackCondition);
+  const arr = horses.map((_,idx)=>({idx, key: logS[idx] + gumbel()}));
+  arr.sort((a,b)=>b.key-a.key);
+  return arr.map(x=>x.idx);
+}
+
+function playRaceAnimation(){
+  if(state.horses.length < 2) return;
+  const order = sampleOneOrder();
+  const m = state.horses.length;
+  const spread = Math.min(22, 4 + m * 2);
+  const finishPct = {};
+  order.forEach((idx,rank)=>{ finishPct[idx] = 96 - rank * (spread/Math.max(m-1,1)); });
+
+  state.raceOrder = null;
+  render();
+
+  const numFrames = 36;
+  const intervalMs = 70;
+  const phases = state.horses.map(()=>Math.random()*Math.PI*2);
+  const amps = state.horses.map(()=>4+Math.random()*6);
+  let frame = 0;
+  const timer = setInterval(()=>{
+    frame++;
+    const t = frame/numFrames;
+    state.horses.forEach((h,idx)=>{
+      const base = t * finishPct[idx];
+      const jitter = amps[idx] * (1-t) * Math.sin(phases[idx] + t*10);
+      const pos = Math.max(0, Math.min(98, base + jitter));
+      const el = document.getElementById(`pos-${h.id}`);
+      if(el) el.style.left = pos + "%";
+    });
+    if(frame >= numFrames){
+      clearInterval(timer);
+      state.raceOrder = order;
+      render();
+    }
+  }, intervalMs);
+}
+
+function raceAnimationCardHtml(){
+  const lanes = state.horses.map(h=>{
+    const c = frameColor(h.frameNumber > 0 ? h.frameNumber : h.number);
+    return `
+    <div class="lane">
+      <div class="lane-label">${badge(h)}<span>${h.name}</span></div>
+      <div class="lane-track">
+        <div class="goal-line"></div>
+        <span class="goal-text">G</span>
+        <div class="horse-marker" id="pos-${h.id}" style="background:${c.bg};color:${c.fg}">${h.number}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  let resultHtml = "";
+  if(state.raceOrder){
+    resultHtml = `<div class="result-line" style="margin-top:10px">` +
+      state.raceOrder.slice(0, Math.min(3, state.raceOrder.length)).map((idx,r)=>{
+        const h = state.horses[idx];
+        return `${r+1}着 ${badge(h)} ${h.name}`;
+      }).join("&nbsp;&nbsp;") +
+    `</div>`;
+  }
+
+  return `
+  <div class="card">
+    <div class="card-title">レース再現アニメーション</div>
+    <div class="lanes">${lanes}</div>
+    <button class="btn" style="margin-top:10px" onclick="playRaceAnimation()">▶ 1レース再生</button>
+    ${resultHtml}
+    <p class="note">毎回ランダムに1レース分だけ抜き出して再生するイメージ表示です。実際の確率は「単勝勝率」や「三連単」などの集計結果を参考にしてください。</p>
+  </div>`;
+}
+
+function runMonteCarlo(horses, n, trackCondition){
+  const m = horses.length;
+  const logS = computeStrengths(horses, trackCondition);
 
   const placeRank = m <= 7 ? 2 : 3;
   const winCount = new Array(m).fill(0);
@@ -401,11 +497,7 @@ async function analyzeImages(files){
 }
 
 function runSim(){
-  const cleaned = state.horses.map(h=>({
-    ...h,
-    odds: Number(h.odds)>0 ? Number(h.odds) : 100,
-    finalOdds: Number(h.finalOdds)>0 ? Number(h.finalOdds) : null,
-  }));
+  const cleaned = getCleanedHorses();
   state.simResults = runMonteCarlo(cleaned, state.numSim, state.trackCondition);
   render();
 }
@@ -657,6 +749,7 @@ function render(){
     html += horseTableCardHtml();
   }
   if(state.horses.length >= 2){
+    html += raceAnimationCardHtml();
     html += simSettingsCardHtml();
   }
   if(state.simResults){
