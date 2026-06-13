@@ -82,7 +82,12 @@
 const FRAME_BG = ["#F2F2F2","#2B2B2B","#D9453B","#3E6FE0","#F4D23A","#3FA15B","#EE8C2E","#F2A8C7"];
 const FRAME_FG = ["#1A1A1A","#FFFFFF","#FFFFFF","#FFFFFF","#1A1A1A","#FFFFFF","#1A1A1A","#1A1A1A"];
 function frameColor(num){ const idx=((num-1)%8+8)%8; return {bg:FRAME_BG[idx], fg:FRAME_FG[idx]}; }
-function badge(num){ const c=frameColor(num); return `<span class="badge" style="background:${c.bg};color:${c.fg}">${num}</span>`; }
+function badge(h){
+  const num = (typeof h === "object") ? h.number : h;
+  const frameNum = (typeof h === "object" && h.frameNumber > 0) ? h.frameNumber : num;
+  const c = frameColor(frameNum);
+  return `<span class="badge" style="background:${c.bg};color:${c.fg}">${num}</span>`;
+}
 
 // 馬場状態 × 適性 補正係数
 const APTITUDE_FACTOR = {
@@ -93,6 +98,9 @@ const APTITUDE_FACTOR = {
   "不明": {"得意":1.00,"普通":1.00,"不得意":1.00},
 };
 const TRACK_CONDITIONS = ["不明","良","稍重","重","不良"];
+
+// 騎手評価による実力補正係数（馬場状態に関係なく適用）
+const JOCKEY_FACTOR = { "得意": 1.10, "普通": 1.00, "不得意": 0.90 };
 
 // ---------- 状態 ----------
 let state = {
@@ -120,6 +128,7 @@ function runMonteCarlo(horses, n, trackCondition){
     const oddsForSim = (h.finalOdds && h.finalOdds > 0) ? h.finalOdds : h.odds;
     let s = 1 / Math.max(oddsForSim, 0.1);
     s *= (factorTable[h.aptitude] ?? 1.0);
+    s *= (JOCKEY_FACTOR[h.jockeyRating] ?? 1.0);
     if (h.paddock) s *= 1.1;
     return s;
   });
@@ -170,7 +179,7 @@ function topEntries(map, n, topN=6){
 function comboListHtml(entries, horses, ordered){
   return entries.map((e,i)=>{
     const idxs = e.key.split("-").map(Number);
-    const badges = idxs.map((idx,j)=> badge(horses[idx].number) + (j<idxs.length-1 ? `<span class="combo-sep">${ordered?"→":"-"}</span>` : "")).join("");
+    const badges = idxs.map((idx,j)=> badge(horses[idx]) + (j<idxs.length-1 ? `<span class="combo-sep">${ordered?"→":"-"}</span>` : "")).join("");
     return `<div class="combo-row"><span class="combo-idx">${i+1}</span><div class="combo-badges">${badges}</div><span class="combo-prob">${e.prob.toFixed(2)}%</span></div>`;
   }).join("");
 }
@@ -179,7 +188,7 @@ function comboListHtml(entries, horses, ordered){
 function genId(){ return Date.now() + Math.random(); }
 
 function addHorse(){
-  state.horses.push({id:genId(), number: state.horses.length+1, name:"", odds:10, finalOdds:null, popularity:null, aptitude:"普通", paddock:false});
+  state.horses.push({id:genId(), number: state.horses.length+1, name:"", odds:10, finalOdds:null, popularity:null, frameNumber:null, jockey:"", jockeyRating:"普通", aptitude:"普通", paddock:false});
   render();
 }
 function removeHorse(id){
@@ -190,7 +199,7 @@ function updateHorseField(id, field, value, numeric){
   const h = state.horses.find(x=>x.id===id);
   if(!h) return;
   if(numeric){
-    h[field] = value==="" ? (field==="finalOdds"||field==="popularity" ? null : 0) : Number(value);
+    h[field] = value==="" ? (field==="finalOdds"||field==="popularity"||field==="frameNumber" ? null : 0) : Number(value);
   } else {
     h[field] = value;
   }
@@ -198,6 +207,10 @@ function updateHorseField(id, field, value, numeric){
 function setAptitude(id, val){
   const h = state.horses.find(x=>x.id===id);
   if(h){ h.aptitude = val; render(); }
+}
+function setJockeyRating(id, val){
+  const h = state.horses.find(x=>x.id===id);
+  if(h){ h.jockeyRating = val; render(); }
 }
 function togglePaddock(id){
   const h = state.horses.find(x=>x.id===id);
@@ -238,7 +251,7 @@ function parseQuickText(){
       const number = Number(parts[0]) || (i+1);
       const name = (parts[1] || "").trim() || `${i+1}番`;
       const odds = Number(parts[2]) > 0 ? Number(parts[2]) : 10;
-      newHorses.push({ id: genId(), number, name, odds, finalOdds:null, popularity:null, aptitude:"普通", paddock:false });
+      newHorses.push({ id: genId(), number, name, odds, finalOdds:null, popularity:null, frameNumber:null, jockey:"", jockeyRating:"普通", aptitude:"普通", paddock:false });
       return;
     }
 
@@ -261,6 +274,9 @@ function parseQuickText(){
       odds,
       finalOdds: null,
       popularity: null,
+      frameNumber: null,
+      jockey: "",
+      jockeyRating: "普通",
       aptitude: "普通",
       paddock: false,
     });
@@ -288,6 +304,9 @@ function applyParsedJson(rawText){
     id: genId(),
     number: Number(h.number) || i+1,
     name: h.name || `${i+1}番`,
+    frameNumber: Number(h.frameNumber) > 0 ? Number(h.frameNumber) : null,
+    jockey: h.jockey || "",
+    jockeyRating: ["得意","普通","不得意"].includes(h.jockeyRating) ? h.jockeyRating : "普通",
     odds: Number(h.odds)>0 ? Number(h.odds) : 10,
     finalOdds: null,
     popularity: h.popularity!=null ? Number(h.popularity) : null,
@@ -366,7 +385,14 @@ async function analyzeImages(files){
       throw new Error(data?.error?.message || data?.error || `HTTP ${resp.status}`);
     }
     const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-    applyParsedJson(text);
+    if(!text.trim()){
+      throw new Error(`応答が空でした (stop_reason: ${data.stop_reason || "不明"})。画像を減らすか、解像度を下げて再試行してください。`);
+    }
+    try{
+      applyParsedJson(text);
+    }catch(e2){
+      throw new Error(`JSON解析エラー: ${e2.message} / 応答(${data.stop_reason || ""}): ${text.slice(0,400)}`);
+    }
   }catch(e){
     state.error = `解析エラー: ${e.message || e}`;
   }
@@ -452,7 +478,16 @@ function horseTableCardHtml(){
   const rows = state.horses.map(h=>`
     <tr>
       <td><input class="num-in" type="number" value="${h.number}" oninput="updateHorseField(${h.id},'number',this.value,true)"/></td>
+      <td><input class="num-in" type="number" placeholder="—" value="${h.frameNumber ?? ''}" oninput="updateHorseField(${h.id},'frameNumber',this.value,true)"/></td>
       <td><input class="name-in" type="text" value="${h.name}" oninput="updateHorseField(${h.id},'name',this.value,false)"/></td>
+      <td>
+        <input class="name-in" type="text" placeholder="騎手" value="${h.jockey}" oninput="updateHorseField(${h.id},'jockey',this.value,false)" style="margin-bottom:4px"/>
+        <select class="sel-in" onchange="setJockeyRating(${h.id},this.value)">
+          <option value="得意" ${h.jockeyRating==='得意'?'selected':''}>得意</option>
+          <option value="普通" ${h.jockeyRating==='普通'?'selected':''}>普通</option>
+          <option value="不得意" ${h.jockeyRating==='不得意'?'selected':''}>不得意</option>
+        </select>
+      </td>
       <td><input class="odds-in" type="number" step="0.1" value="${h.odds}" oninput="updateHorseField(${h.id},'odds',this.value,true)"/></td>
       <td><input class="odds-in" type="number" step="0.1" placeholder="—" value="${h.finalOdds ?? ''}" oninput="updateHorseField(${h.id},'finalOdds',this.value,true)"/></td>
       <td>
@@ -471,11 +506,11 @@ function horseTableCardHtml(){
     <div class="card-title">出走馬一覧（編集可）</div>
     <div class="overflow">
       <table>
-        <thead><tr><th>馬番</th><th>馬名</th><th>単勝</th><th>直前</th><th>適性</th><th style="text-align:center">パド</th><th></th></tr></thead>
+        <thead><tr><th>馬番</th><th>枠</th><th>馬名</th><th>騎手/評価</th><th>単勝</th><th>直前</th><th>馬場適性</th><th style="text-align:center">パド</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p class="note">直前オッズが入力されている馬はそちらをシミュレーションに使用します。★（パドック推奨）はクリックでON/OFF、実力値を+10%補正します。</p>
+    <p class="note">「騎手/評価」は、画像解析時にClaudeの一般知識（最新の成績データではない）から初期値を提案します。ご自身の判断で「得意・普通・不得意」を調整すると、実力値を±10%補正します。直前オッズが入力されている馬はそちらをシミュレーションに使用します。★（パドック推奨）はクリックでON/OFF、実力値を+10%補正します。</p>
     <button class="btn-ghost" onclick="addHorse()">＋ 馬を追加</button>
   </div>`;
 }
@@ -496,11 +531,11 @@ function resultsHtml(){
   const sr = state.simResults;
   const horses = state.horses;
 
-  const chartData = horses.map((h,i)=>({label:`${h.number} ${h.name}`, number:h.number, prob:(sr.winCount[i]/sr.n)*100}))
+  const chartData = horses.map((h,i)=>({label:`${h.number} ${h.name}`, number:h.number, frameNumber:h.frameNumber, prob:(sr.winCount[i]/sr.n)*100}))
     .sort((a,b)=>b.prob-a.prob);
   const maxProb = Math.max(...chartData.map(d=>d.prob), 1);
   const barsHtml = chartData.map(d=>{
-    const c = frameColor(d.number);
+    const c = frameColor(d.frameNumber > 0 ? d.frameNumber : d.number);
     const w = (d.prob/maxProb*100).toFixed(1);
     return `<div class="bar-row"><span class="bar-label">${d.label}</span><div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${c.bg}"></div></div><span class="bar-val">${d.prob.toFixed(1)}%</span></div>`;
   }).join("");
@@ -509,7 +544,7 @@ function resultsHtml(){
   const predictedHtml = predicted.map((h,i)=>`
     <div class="predicted-card">
       <div class="note" style="margin:0 0 4px">${i+1}着候補</div>
-      <div style="margin-bottom:4px">${badge(h.number)}</div>
+      <div style="margin-bottom:4px">${badge(h)}</div>
       <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h.name}</div>
       <div style="font-family:monospace;font-size:11px;color:var(--accent);margin-top:4px">avg ${h.avgRank.toFixed(2)}</div>
     </div>`).join("");
@@ -523,11 +558,13 @@ function resultsHtml(){
   let conclusionExtra = "";
   if(state.trackCondition !== "不明") conclusionExtra += `<div>馬場状態「${state.trackCondition}」を反映して各馬の適性を補正済み</div>`;
   if(paddockHorses.length>0) conclusionExtra += `<div>パドック推奨: ${paddockHorses.map(h=>h.number+'番').join('・')} を加味</div>`;
+  const jockeyAdjusted = horses.filter(h=>h.jockeyRating!=='普通');
+  if(jockeyAdjusted.length>0) conclusionExtra += `<div>騎手評価: ${jockeyAdjusted.map(h=>`${h.number}番(${h.jockeyRating})`).join('・')} を加味</div>`;
 
   let trifectaRowHtml = "";
   if(topTrifecta){
     const idxs = topTrifecta.key.split("-").map(Number);
-    const badges = idxs.map((idx,j)=> badge(horses[idx].number) + (j<idxs.length-1?`<span class="combo-sep">→</span>`:"")).join("");
+    const badges = idxs.map((idx,j)=> badge(horses[idx]) + (j<idxs.length-1?`<span class="combo-sep">→</span>`:"")).join("");
     trifectaRowHtml = `<div class="conclusion-row"><span class="note" style="margin:0">三連単本線</span><div class="combo-badges" style="flex:0">${badges}</div><span class="combo-prob ml-auto">${topTrifecta.prob.toFixed(2)}%</span></div>`;
   }
 
@@ -540,7 +577,7 @@ function resultsHtml(){
     const delta = (h.finalOdds && h.finalOdds>0 && h.finalOdds!==h.odds)
       ? `<div class="delta" style="color:${h.finalOdds<h.odds?'var(--green)':'var(--red)'}">${h.odds}→${h.finalOdds}</div>` : "";
     return `<tr>
-      <td><div class="horse-name-cell">${badge(h.number)}<div><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">${h.name}</div>${delta}</div></div></td>
+      <td><div class="horse-name-cell">${badge(h)}<div><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">${h.name}</div>${delta}</div></div></td>
       <td style="text-align:right;font-family:monospace">${win.toFixed(1)}%</td>
       <td style="text-align:right;font-family:monospace;color:var(--sub)">${place.toFixed(1)}%</td>
       <td style="text-align:right;font-family:monospace;color:${ev>1?'var(--green)':'var(--sub)'}">${ev.toFixed(2)}</td>
@@ -567,7 +604,7 @@ function resultsHtml(){
   <div class="card">
     <div class="card-title">AIの結論</div>
     <div class="led">${sr.n.toLocaleString()} RACES SIMULATED</div>
-    <div class="conclusion-row"><span class="note" style="margin:0">本命（単勝1位）</span>${badge(topPick.number)}<span style="font-weight:700">${topPick.name}</span><span class="combo-prob ml-auto">${((sr.winCount[topPickIdx]/sr.n)*100).toFixed(1)}%</span></div>
+    <div class="conclusion-row"><span class="note" style="margin:0">本命（単勝1位）</span>${badge(topPick)}<span style="font-weight:700">${topPick.name}</span><span class="combo-prob ml-auto">${((sr.winCount[topPickIdx]/sr.n)*100).toFixed(1)}%</span></div>
     ${trifectaRowHtml}
     <div class="note">${conclusionExtra}</div>
   </div>
