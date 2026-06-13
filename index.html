@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ODDS LAB - 競馬モンテカルロシミュレーター</title>
+<style>
+  :root{
+    --bg:#0A0D13; --card:#151B26; --border:#232B3A;
+    --text:#E9EDF5; --sub:#8893A6; --accent:#F2C14E;
+    --green:#6EE38A; --red:#F2A0A0;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN",sans-serif;}
+  .header{padding:24px 16px 16px;border-bottom:1px solid var(--border);}
+  .tag{font-family:monospace;font-size:11px;letter-spacing:2px;padding:2px 8px;border-radius:4px;background:#000;color:var(--accent);}
+  .subtitle{font-size:12px;color:var(--sub);margin-left:8px;}
+  .title{font-size:20px;font-weight:800;margin-top:6px;letter-spacing:-0.02em;}
+  .container{padding:16px;max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:16px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;}
+  .card-title{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--sub);margin:0 0 12px;}
+  textarea,input,select{background:#0F141E;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12px;font-family:inherit;}
+  textarea{width:100%;resize:vertical;font-family:monospace;}
+  .btn{background:var(--accent);color:#1A1505;border:none;border-radius:12px;padding:12px;font-weight:700;font-size:14px;width:100%;cursor:pointer;}
+  .btn:active{opacity:0.85;}
+  .btn:disabled{opacity:0.5;}
+  .btn-secondary{background:#0F141E;color:var(--text);border:1px solid var(--border);border-radius:12px;padding:12px;font-weight:700;font-size:13px;width:100%;cursor:pointer;}
+  .btn-ghost{background:transparent;border:1px dashed var(--border);color:var(--sub);border-radius:8px;padding:8px;width:100%;cursor:pointer;font-size:12px;margin-top:8px;}
+  .error-box{background:#2A1A1A;color:var(--red);border-radius:8px;padding:8px;font-size:12px;margin-top:8px;line-height:1.5;}
+  .status-box{background:#1A2333;color:var(--accent);border-radius:8px;padding:8px;font-size:12px;margin-top:8px;line-height:1.5;}
+  .hint{font-size:11px;color:var(--sub);line-height:1.7;background:#0F141E;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px;}
+  .badge{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;font-weight:700;font-size:11px;flex-shrink:0;}
+  table{width:100%;font-size:12px;border-collapse:collapse;}
+  th{color:var(--sub);font-size:11px;text-align:left;padding-bottom:6px;font-weight:600;}
+  td{padding:6px 3px;border-top:1px solid var(--border);vertical-align:middle;}
+  .num-in{width:48px;text-align:center;}
+  .odds-in{width:54px;}
+  .name-in{width:100%;min-width:72px;}
+  .sel-in{width:62px;}
+  .overflow{overflow-x:auto;}
+  .chip-row{display:flex;gap:8px;flex-wrap:wrap;}
+  .chip{border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;border:1px solid var(--border);background:#0F141E;color:var(--sub);cursor:pointer;}
+  .chip.active{background:var(--accent);color:#1A1505;border-color:var(--accent);}
+  .row{display:flex;gap:8px;}
+  .row > *{flex:1;}
+  .bar-row{display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:6px;}
+  .bar-label{width:96px;color:var(--sub);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-track{flex:1;background:#0F141E;border-radius:4px;height:14px;overflow:hidden;}
+  .bar-fill{height:100%;}
+  .bar-val{font-family:monospace;color:var(--accent);width:44px;text-align:right;flex-shrink:0;}
+  .combo-row{display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px;}
+  .combo-idx{width:16px;color:var(--sub);font-size:11px;flex-shrink:0;}
+  .combo-badges{display:flex;align-items:center;gap:4px;flex:1;flex-wrap:wrap;}
+  .combo-sep{color:var(--sub);font-size:11px;}
+  .combo-prob{font-family:monospace;color:var(--accent);font-size:11px;flex-shrink:0;}
+  .predicted-grid{display:flex;gap:8px;}
+  .predicted-card{flex:1;background:#0F141E;border:1px solid var(--border);border-radius:12px;padding:8px;text-align:center;}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .note{font-size:11px;color:var(--sub);line-height:1.7;margin-top:8px;}
+  .led{font-family:monospace;font-size:11px;letter-spacing:2px;padding:3px 8px;border-radius:4px;background:#000;color:var(--accent);display:inline-block;margin-bottom:10px;}
+  .conclusion-row{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px;flex-wrap:wrap;}
+  .ml-auto{margin-left:auto;}
+  .star-btn{background:none;border:none;cursor:pointer;font-size:16px;padding:0;}
+  .trash-btn{background:none;border:none;cursor:pointer;font-size:13px;color:var(--sub);padding:0;}
+  .horse-name-cell{display:flex;align-items:center;gap:6px;}
+  .delta{font-family:monospace;font-size:10px;}
+  .upload-label{display:flex;flex-direction:column;align-items:center;justify-content:center;border:1.5px dashed var(--border);background:#0F141E;border-radius:12px;padding:18px;cursor:pointer;text-align:center;margin-bottom:10px;}
+  .upload-label span{font-size:12px;color:var(--sub);margin-top:6px;}
+  .tabbtn{flex:1;padding:8px;font-size:12px;font-weight:700;border-radius:8px;border:1px solid var(--border);background:#0F141E;color:var(--sub);cursor:pointer;}
+  .tabbtn.active{background:var(--accent);color:#1A1505;border-color:var(--accent);}
+</style>
+</head>
+<body>
+<div class="header">
+  <span class="tag">ODDS LAB</span><span class="subtitle">モンテカルロ着順シミュレーター</span>
+  <div class="title" id="raceTitle">競馬AIシミュレーター</div>
+</div>
+<div id="app" class="container"></div>
+
+<script>
+// ---------- 識別カラー (枠番風) ----------
+const FRAME_BG = ["#F2F2F2","#2B2B2B","#D9453B","#3E6FE0","#F4D23A","#3FA15B","#EE8C2E","#F2A8C7"];
+const FRAME_FG = ["#1A1A1A","#FFFFFF","#FFFFFF","#FFFFFF","#1A1A1A","#FFFFFF","#1A1A1A","#1A1A1A"];
+function frameColor(num){ const idx=((num-1)%8+8)%8; return {bg:FRAME_BG[idx], fg:FRAME_FG[idx]}; }
+function badge(num){ const c=frameColor(num); return `<span class="badge" style="background:${c.bg};color:${c.fg}">${num}</span>`; }
+
+// 馬場状態 × 適性 補正係数
+const APTITUDE_FACTOR = {
+  "良":   {"得意":1.00,"普通":1.00,"不得意":1.00},
+  "稍重": {"得意":1.08,"普通":1.00,"不得意":0.93},
+  "重":   {"得意":1.15,"普通":1.00,"不得意":0.87},
+  "不良": {"得意":1.25,"普通":1.00,"不得意":0.80},
+  "不明": {"得意":1.00,"普通":1.00,"不得意":1.00},
+};
+const TRACK_CONDITIONS = ["不明","良","稍重","重","不良"];
+
+// ---------- 状態 ----------
+let state = {
+  raceName: "",
+  horses: [],
+  quickText: "",
+  jsonInput: "",
+  error: null,
+  status: null,
+  inputTab: "image", // "image" | "quick" | "json"
+  trackCondition: "不明",
+  numSim: 10000,
+  simResults: null,
+};
+
+// ---------- モンテカルロ ----------
+function gumbel(){ const u = Math.random(); return -Math.log(-Math.log(u || 1e-12)); }
+
+function runMonteCarlo(horses, n, trackCondition){
+  const m = horses.length;
+  const condKey = APTITUDE_FACTOR[trackCondition] ? trackCondition : "不明";
+  const factorTable = APTITUDE_FACTOR[condKey];
+
+  const strengths = horses.map(h => {
+    const oddsForSim = (h.finalOdds && h.finalOdds > 0) ? h.finalOdds : h.odds;
+    let s = 1 / Math.max(oddsForSim, 0.1);
+    s *= (factorTable[h.aptitude] ?? 1.0);
+    if (h.paddock) s *= 1.1;
+    return s;
+  });
+  const total = strengths.reduce((a,b)=>a+b,0);
+  const logS = strengths.map(s => Math.log(s/total));
+
+  const placeRank = m <= 7 ? 2 : 3;
+  const winCount = new Array(m).fill(0);
+  const placeCount = new Array(m).fill(0);
+  const rankSum = new Array(m).fill(0);
+  const quinella = new Map(), exacta = new Map(), wide = new Map(), trio = new Map(), trifecta = new Map();
+
+  for (let i=0;i<n;i++){
+    const arr = horses.map((_,idx)=>({idx, key: logS[idx] + gumbel()}));
+    arr.sort((a,b)=>b.key-a.key);
+    const order = arr.map(x=>x.idx);
+
+    winCount[order[0]]++;
+    for(let r=0;r<placeRank;r++) placeCount[order[r]]++;
+    order.forEach((idx,rank)=>{ rankSum[idx]+=rank+1; });
+
+    if(m>=2){
+      const a=order[0], b=order[1];
+      const uKey=[a,b].sort((x,y)=>x-y).join("-");
+      quinella.set(uKey,(quinella.get(uKey)||0)+1);
+      const oKey=`${a}-${b}`;
+      exacta.set(oKey,(exacta.get(oKey)||0)+1);
+    }
+    if(m>=3){
+      const top3=order.slice(0,3);
+      [[top3[0],top3[1]],[top3[0],top3[2]],[top3[1],top3[2]]].forEach(([x,y])=>{
+        const k=[x,y].sort((p,q)=>p-q).join("-");
+        wide.set(k,(wide.get(k)||0)+1);
+      });
+      const trioKey=[...top3].sort((x,y)=>x-y).join("-");
+      trio.set(trioKey,(trio.get(trioKey)||0)+1);
+      const trifectaKey=top3.join("-");
+      trifecta.set(trifectaKey,(trifecta.get(trifectaKey)||0)+1);
+    }
+  }
+  return {winCount, placeCount, rankSum, quinella, exacta, wide, trio, trifecta, n, placeRank};
+}
+
+function topEntries(map, n, topN=6){
+  return [...map.entries()].sort((a,b)=>b[1]-a[1]).slice(0,topN).map(([key,count])=>({key, prob:(count/n)*100}));
+}
+
+function comboListHtml(entries, horses, ordered){
+  return entries.map((e,i)=>{
+    const idxs = e.key.split("-").map(Number);
+    const badges = idxs.map((idx,j)=> badge(horses[idx].number) + (j<idxs.length-1 ? `<span class="combo-sep">${ordered?"→":"-"}</span>` : "")).join("");
+    return `<div class="combo-row"><span class="combo-idx">${i+1}</span><div class="combo-badges">${badges}</div><span class="combo-prob">${e.prob.toFixed(2)}%</span></div>`;
+  }).join("");
+}
+
+// ---------- データ操作 ----------
+function genId(){ return Date.now() + Math.random(); }
+
+function addHorse(){
+  state.horses.push({id:genId(), number: state.horses.length+1, name:"", odds:10, finalOdds:null, popularity:null, aptitude:"普通", paddock:false});
+  render();
+}
+function removeHorse(id){
+  state.horses = state.horses.filter(h=>h.id!==id);
+  render();
+}
+function updateHorseField(id, field, value, numeric){
+  const h = state.horses.find(x=>x.id===id);
+  if(!h) return;
+  if(numeric){
+    h[field] = value==="" ? (field==="finalOdds"||field==="popularity" ? null : 0) : Number(value);
+  } else {
+    h[field] = value;
+  }
+}
+function setAptitude(id, val){
+  const h = state.horses.find(x=>x.id===id);
+  if(h){ h.aptitude = val; render(); }
+}
+function togglePaddock(id){
+  const h = state.horses.find(x=>x.id===id);
+  if(h){ h.paddock = !h.paddock; render(); }
+}
+function setTrackCondition(c){
+  state.trackCondition = c; render();
+}
+function setNumSim(n){
+  state.numSim = n; render();
+}
+function setInputTab(t){
+  state.inputTab = t; render();
+}
+
+// ---------- テンプレート ----------
+function generateTemplate(){
+  const input = document.getElementById("templateCount");
+  const n = Math.max(1, Math.min(18, Number(input ? input.value : 8) || 8));
+  const lines = [];
+  for(let i=1;i<=n;i++) lines.push(`${i}\t\t10.0`);
+  state.quickText = lines.join("\n");
+  state.error = null;
+  render();
+}
+
+// 「馬番 馬名 オッズ [人気]」のような行、またはOCR生テキストから推定して表に反映
+function parseQuickText(){
+  state.error = null;
+  const ta = document.getElementById("quickInput");
+  const text = ta ? ta.value : state.quickText;
+  const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
+  const newHorses = [];
+  lines.forEach((line, i)=>{
+    // タブ区切り（テンプレート由来）: 馬番 [TAB] 馬名 [TAB] オッズ
+    if(line.includes("\t")){
+      const parts = line.split("\t");
+      const number = Number(parts[0]) || (i+1);
+      const name = (parts[1] || "").trim() || `${i+1}番`;
+      const odds = Number(parts[2]) > 0 ? Number(parts[2]) : 10;
+      newHorses.push({ id: genId(), number, name, odds, finalOdds:null, popularity:null, aptitude:"普通", paddock:false });
+      return;
+    }
+
+    // 馬番: 行頭の1〜2桁の数字
+    const numMatch = line.match(/^([0-9０-９]{1,2})\D/) || line.match(/^([0-9０-９]{1,2})$/);
+    const number = numMatch ? Number(numMatch[1].replace(/[０-９]/g, d => "0123456789"["０１２３４５６７８９".indexOf(d)])) : (i+1);
+
+    // オッズ: 小数点を含む数値（1.0〜999.9）
+    const oddsMatches = line.match(/\d{1,3}\.\d{1,2}/g) || [];
+    const odds = oddsMatches.length > 0 ? Number(oddsMatches[oddsMatches.length-1]) : 10;
+
+    // 馬名: カタカナ・漢字・ひらがなの2文字以上の連続を抽出し、最長のものを採用
+    const nameMatches = line.match(/[一-龠ぁ-んァ-ヶー]{2,}/g) || [];
+    const name = nameMatches.sort((a,b)=>b.length-a.length)[0] || `${i+1}番`;
+
+    newHorses.push({
+      id: genId(),
+      number,
+      name,
+      odds,
+      finalOdds: null,
+      popularity: null,
+      aptitude: "普通",
+      paddock: false,
+    });
+  });
+  if(newHorses.length === 0){
+    state.error = "テキストから出走馬を抽出できませんでした。1行に1頭、「馬番 馬名 オッズ」の形式で入力してみてください。";
+    render();
+    return;
+  }
+  state.horses = newHorses;
+  state.simResults = null;
+  render();
+}
+
+// 解析結果テキスト(JSON文字列、コードブロック付きでも可)を取り込む共通処理
+function applyParsedJson(rawText){
+  let clean = rawText.replace(/```json/g,"").replace(/```/g,"").trim();
+  const first = clean.indexOf("{");
+  const last = clean.lastIndexOf("}");
+  if(first!==-1 && last!==-1 && last>first) clean = clean.slice(first, last+1);
+  const parsed = JSON.parse(clean);
+
+  const paddockSet = new Set((parsed.paddockPicks||[]).map(Number));
+  const newHorses = (parsed.horses||[]).map((h,i)=>({
+    id: genId(),
+    number: Number(h.number) || i+1,
+    name: h.name || `${i+1}番`,
+    odds: Number(h.odds)>0 ? Number(h.odds) : 10,
+    finalOdds: null,
+    popularity: h.popularity!=null ? Number(h.popularity) : null,
+    aptitude: "普通",
+    paddock: paddockSet.has(Number(h.number)),
+  }));
+  if(newHorses.length===0) throw new Error("horsesが空です。出走馬データが含まれていません。");
+
+  state.raceName = parsed.raceName || "";
+  if(TRACK_CONDITIONS.includes(parsed.trackCondition)) state.trackCondition = parsed.trackCondition;
+  state.horses = newHorses;
+  state.simResults = null;
+}
+
+function loadFromJson(){
+  state.error = null;
+  const ta = document.getElementById("jsonInput");
+  const clean = (ta ? ta.value : "").trim();
+  if(!clean){ state.error = "JSONを貼り付けてください。"; render(); return; }
+  try{
+    applyParsedJson(clean);
+  }catch(e){
+    state.error = `JSON読込エラー: ${e.message}`;
+  }
+  render();
+}
+
+// 画像をリサイズしてPNG(base64)に変換
+function fileToResizedPngBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 1568;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/png").split(",")[1]);
+      };
+      img.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("ファイルの読み込みに失敗しました"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function analyzeImages(files){
+  if(!files || files.length===0) return;
+  state.error = null;
+  state.status = "画像を解析中...";
+  render();
+  try{
+    const images = [];
+    for(const file of files){
+      const data = await fileToResizedPngBase64(file);
+      images.push({ mediaType: "image/png", data });
+    }
+    const resp = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ images }),
+    });
+    const raw = await resp.text();
+    let data;
+    try{ data = JSON.parse(raw); }catch{ throw new Error(`サーバー応答が不正です (status ${resp.status}): ${raw.slice(0,300)}`); }
+    if(!resp.ok || data.error){
+      throw new Error(data?.error?.message || data?.error || `HTTP ${resp.status}`);
+    }
+    const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+    applyParsedJson(text);
+  }catch(e){
+    state.error = `解析エラー: ${e.message || e}`;
+  }
+  state.status = null;
+  render();
+}
+
+function runSim(){
+  const cleaned = state.horses.map(h=>({
+    ...h,
+    odds: Number(h.odds)>0 ? Number(h.odds) : 100,
+    finalOdds: Number(h.finalOdds)>0 ? Number(h.finalOdds) : null,
+  }));
+  state.simResults = runMonteCarlo(cleaned, state.numSim, state.trackCondition);
+  render();
+}
+
+// ---------- レンダリング ----------
+function inputCardHtml(){
+  const tabs = `
+    <div class="chip-row" style="margin-bottom:10px">
+      <button class="tabbtn ${state.inputTab==='image'?'active':''}" onclick="setInputTab('image')">画像から解析</button>
+      <button class="tabbtn ${state.inputTab==='quick'?'active':''}" onclick="setInputTab('quick')">クイック入力</button>
+      <button class="tabbtn ${state.inputTab==='json'?'active':''}" onclick="setInputTab('json')">JSON貼り付け</button>
+    </div>`;
+
+  let body = "";
+  if(state.inputTab === "image"){
+    body = `
+      <label class="upload-label">
+        <div style="font-size:22px">📷</div>
+        <span>出馬表・直前オッズ・パドック情報など、複数枚選択可</span>
+        <input type="file" accept="image/*" multiple style="display:none" onchange="analyzeImages(this.files)"/>
+      </label>
+      ${state.status ? `<div class="status-box">${state.status}</div>` : ""}
+      <div class="hint">選択した画像をサーバー経由でClaudeに送り、出走馬・馬場状態・パドック推奨などを自動抽出します（Anthropic APIの利用料が発生します）。</div>
+    `;
+  } else if(state.inputTab === "quick"){
+    body = `
+      <div class="row" style="margin-bottom:10px">
+        <input id="templateCount" type="number" min="1" max="18" value="8" style="text-align:center"/>
+        <button class="btn-secondary" style="flex:2" onclick="generateTemplate()">頭数分のテンプレートを作成</button>
+      </div>
+      <div class="hint">
+        1行1頭、タブ区切りで「馬番 → 馬名 → オッズ」の順に入力してください（テンプレート作成ボタンでこの形式の空欄が用意されます）。
+      </div>
+      <textarea id="quickInput" rows="6" placeholder="1&#9;ホースイチ&#9;3.2&#10;2&#9;ホースニ&#9;8.1&#10;3&#9;ホースサン&#9;1.9">${state.quickText}</textarea>
+      <button class="btn" style="margin-top:10px" onclick="parseQuickText()">表に反映</button>
+    `;
+  } else {
+    body = `
+      <div class="hint">
+        出馬表のスクショ等をClaudeのチャットに送ると、下記JSON形式で結果を返せます。それをコピーしてここに貼り付けてください。
+      </div>
+      <textarea id="jsonInput" rows="5" placeholder='{"raceName":"...","trackCondition":"良","paddockPicks":[3,7],"horses":[{"number":1,"name":"馬名","odds":4.5,"popularity":3}]}'>${state.jsonInput}</textarea>
+      <button class="btn" style="margin-top:10px" onclick="loadFromJson()">読み込む</button>
+    `;
+  }
+
+  return `
+  <div class="card">
+    <div class="card-title">出走馬データの読み込み</div>
+    ${tabs}
+    ${body}
+    ${state.error ? `<div class="error-box">${state.error}</div>` : ""}
+    <p class="note">または、下の「出走馬一覧」の「馬を追加」から1頭ずつ手入力することもできます。</p>
+  </div>`;
+}
+
+function trackConditionCardHtml(){
+  const chips = TRACK_CONDITIONS.map(c=>
+    `<button class="chip ${state.trackCondition===c?'active':''}" onclick="setTrackCondition('${c}')">${c}</button>`
+  ).join("");
+  return `
+  <div class="card">
+    <div class="card-title">馬場状態</div>
+    <div class="chip-row">${chips}</div>
+    <p class="note">「稍重・重・不良」を選ぶと、各馬の「適性」設定（下の一覧）に応じて実力値を補正します。</p>
+  </div>`;
+}
+
+function horseTableCardHtml(){
+  const rows = state.horses.map(h=>`
+    <tr>
+      <td><input class="num-in" type="number" value="${h.number}" oninput="updateHorseField(${h.id},'number',this.value,true)"/></td>
+      <td><input class="name-in" type="text" value="${h.name}" oninput="updateHorseField(${h.id},'name',this.value,false)"/></td>
+      <td><input class="odds-in" type="number" step="0.1" value="${h.odds}" oninput="updateHorseField(${h.id},'odds',this.value,true)"/></td>
+      <td><input class="odds-in" type="number" step="0.1" placeholder="—" value="${h.finalOdds ?? ''}" oninput="updateHorseField(${h.id},'finalOdds',this.value,true)"/></td>
+      <td>
+        <select class="sel-in" onchange="setAptitude(${h.id},this.value)">
+          <option value="得意" ${h.aptitude==='得意'?'selected':''}>得意</option>
+          <option value="普通" ${h.aptitude==='普通'?'selected':''}>普通</option>
+          <option value="不得意" ${h.aptitude==='不得意'?'selected':''}>不得意</option>
+        </select>
+      </td>
+      <td style="text-align:center"><button class="star-btn" onclick="togglePaddock(${h.id})" style="color:${h.paddock?'#F2C14E':'#8893A6'}">${h.paddock?'★':'☆'}</button></td>
+      <td style="text-align:right"><button class="trash-btn" onclick="removeHorse(${h.id})">削除</button></td>
+    </tr>`).join("");
+
+  return `
+  <div class="card">
+    <div class="card-title">出走馬一覧（編集可）</div>
+    <div class="overflow">
+      <table>
+        <thead><tr><th>馬番</th><th>馬名</th><th>単勝</th><th>直前</th><th>適性</th><th style="text-align:center">パド</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p class="note">直前オッズが入力されている馬はそちらをシミュレーションに使用します。★（パドック推奨）はクリックでON/OFF、実力値を+10%補正します。</p>
+    <button class="btn-ghost" onclick="addHorse()">＋ 馬を追加</button>
+  </div>`;
+}
+
+function simSettingsCardHtml(){
+  const chips = [1000,10000,50000].map(n=>
+    `<button class="chip ${state.numSim===n?'active':''}" style="flex:1;font-family:monospace" onclick="setNumSim(${n})">${n.toLocaleString()}回</button>`
+  ).join("");
+  return `
+  <div class="card">
+    <div class="card-title">シミュレーション設定</div>
+    <div class="chip-row" style="margin-bottom:12px">${chips}</div>
+    <button class="btn" onclick="runSim()">▶ レースを${state.numSim.toLocaleString()}回走らせる</button>
+  </div>`;
+}
+
+function resultsHtml(){
+  const sr = state.simResults;
+  const horses = state.horses;
+
+  const chartData = horses.map((h,i)=>({label:`${h.number} ${h.name}`, number:h.number, prob:(sr.winCount[i]/sr.n)*100}))
+    .sort((a,b)=>b.prob-a.prob);
+  const maxProb = Math.max(...chartData.map(d=>d.prob), 1);
+  const barsHtml = chartData.map(d=>{
+    const c = frameColor(d.number);
+    const w = (d.prob/maxProb*100).toFixed(1);
+    return `<div class="bar-row"><span class="bar-label">${d.label}</span><div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${c.bg}"></div></div><span class="bar-val">${d.prob.toFixed(1)}%</span></div>`;
+  }).join("");
+
+  const predicted = horses.map((h,i)=>({...h, avgRank: sr.rankSum[i]/sr.n})).sort((a,b)=>a.avgRank-b.avgRank).slice(0,3);
+  const predictedHtml = predicted.map((h,i)=>`
+    <div class="predicted-card">
+      <div class="note" style="margin:0 0 4px">${i+1}着候補</div>
+      <div style="margin-bottom:4px">${badge(h.number)}</div>
+      <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h.name}</div>
+      <div style="font-family:monospace;font-size:11px;color:var(--accent);margin-top:4px">avg ${h.avgRank.toFixed(2)}</div>
+    </div>`).join("");
+
+  let topPick = horses[0], bestWin = sr.winCount[0];
+  horses.forEach((h,i)=>{ if(sr.winCount[i] > bestWin){ bestWin = sr.winCount[i]; topPick = h; } });
+  const topPickIdx = horses.indexOf(topPick);
+  const topTrifecta = topEntries(sr.trifecta, sr.n, 1)[0];
+
+  const paddockHorses = horses.filter(h=>h.paddock);
+  let conclusionExtra = "";
+  if(state.trackCondition !== "不明") conclusionExtra += `<div>馬場状態「${state.trackCondition}」を反映して各馬の適性を補正済み</div>`;
+  if(paddockHorses.length>0) conclusionExtra += `<div>パドック推奨: ${paddockHorses.map(h=>h.number+'番').join('・')} を加味</div>`;
+
+  let trifectaRowHtml = "";
+  if(topTrifecta){
+    const idxs = topTrifecta.key.split("-").map(Number);
+    const badges = idxs.map((idx,j)=> badge(horses[idx].number) + (j<idxs.length-1?`<span class="combo-sep">→</span>`:"")).join("");
+    trifectaRowHtml = `<div class="conclusion-row"><span class="note" style="margin:0">三連単本線</span><div class="combo-badges" style="flex:0">${badges}</div><span class="combo-prob ml-auto">${topTrifecta.prob.toFixed(2)}%</span></div>`;
+  }
+
+  const winPlaceRows = horses.map((h,i)=>{
+    const oddsForSim = (h.finalOdds && h.finalOdds>0) ? h.finalOdds : h.odds;
+    return {h, oddsForSim, win:(sr.winCount[i]/sr.n)*100, place:(sr.placeCount[i]/sr.n)*100, ev:(sr.winCount[i]/sr.n)*oddsForSim};
+  }).sort((a,b)=>b.win-a.win);
+
+  const winPlaceHtml = winPlaceRows.map(({h,oddsForSim,win,place,ev})=>{
+    const delta = (h.finalOdds && h.finalOdds>0 && h.finalOdds!==h.odds)
+      ? `<div class="delta" style="color:${h.finalOdds<h.odds?'var(--green)':'var(--red)'}">${h.odds}→${h.finalOdds}</div>` : "";
+    return `<tr>
+      <td><div class="horse-name-cell">${badge(h.number)}<div><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">${h.name}</div>${delta}</div></div></td>
+      <td style="text-align:right;font-family:monospace">${win.toFixed(1)}%</td>
+      <td style="text-align:right;font-family:monospace;color:var(--sub)">${place.toFixed(1)}%</td>
+      <td style="text-align:right;font-family:monospace;color:${ev>1?'var(--green)':'var(--sub)'}">${ev.toFixed(2)}</td>
+    </tr>`;
+  }).join("");
+
+  let exoticHtml = "";
+  if(horses.length>=3){
+    exoticHtml = `
+    <div class="card">
+      <div class="card-title">ワイド・三連複</div>
+      <div class="grid-2">
+        <div><div class="note" style="margin:0 0 6px">ワイド</div>${comboListHtml(topEntries(sr.wide,sr.n), horses, false)}</div>
+        <div><div class="note" style="margin:0 0 6px">三連複</div>${comboListHtml(topEntries(sr.trio,sr.n), horses, false)}</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">三連単（本線〜穴）</div>
+      ${comboListHtml(topEntries(sr.trifecta,sr.n,8), horses, true)}
+    </div>`;
+  }
+
+  return `
+  <div class="card">
+    <div class="card-title">AIの結論</div>
+    <div class="led">${sr.n.toLocaleString()} RACES SIMULATED</div>
+    <div class="conclusion-row"><span class="note" style="margin:0">本命（単勝1位）</span>${badge(topPick.number)}<span style="font-weight:700">${topPick.name}</span><span class="combo-prob ml-auto">${((sr.winCount[topPickIdx]/sr.n)*100).toFixed(1)}%</span></div>
+    ${trifectaRowHtml}
+    <div class="note">${conclusionExtra}</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">予想決着順（平均着順ベース）</div>
+    <div class="predicted-grid">${predictedHtml}</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">単勝勝率</div>
+    ${barsHtml}
+  </div>
+
+  <div class="card">
+    <div class="card-title">単勝・複勝</div>
+    <table>
+      <thead><tr><th>馬</th><th style="text-align:right">単勝率</th><th style="text-align:right">複勝率</th><th style="text-align:right">妙味</th></tr></thead>
+      <tbody>${winPlaceHtml}</tbody>
+    </table>
+    <p class="note">※「妙味」=シミュレーション勝率×使用オッズ（直前オッズがあればそちらを使用）。複勝率は${sr.placeRank}着以内に入る確率。1.0を超えるほど割安。オッズの「初期→直前」表示は支持率の変動を示します（緑=支持上昇）。</p>
+  </div>
+
+  <div class="card">
+    <div class="card-title">馬連・馬単</div>
+    <div class="grid-2">
+      <div><div class="note" style="margin:0 0 6px">馬連（順不同）</div>${comboListHtml(topEntries(sr.quinella,sr.n), horses, false)}</div>
+      <div><div class="note" style="margin:0 0 6px">馬単（順序あり）</div>${comboListHtml(topEntries(sr.exacta,sr.n), horses, true)}</div>
+    </div>
+  </div>
+
+  ${exoticHtml}
+
+  <div class="card">
+    <p class="note">本シミュレーションは各馬のオッズ（直前オッズ優先）から推定した実力値に、馬場状態×適性・パドック評価による補正、さらに毎回ランダムなブレ（展開・状態など）を加えてレースを多数回再現するモンテカルロ法（Plackett-Luce/Gumbel法）に基づいています。各買い目の確率は実際の的中率を保証するものではなく、参考情報としてご活用ください。賭けはご自身の判断と責任で、無理のない範囲で楽しんでください。</p>
+  </div>`;
+}
+
+function render(){
+  document.getElementById("raceTitle").textContent = state.raceName || "競馬AIシミュレーター";
+
+  const qa = document.getElementById("quickInput");
+  if(qa) state.quickText = qa.value;
+  const ja = document.getElementById("jsonInput");
+  if(ja) state.jsonInput = ja.value;
+
+  let html = inputCardHtml();
+  if(state.horses.length > 0){
+    html += trackConditionCardHtml();
+    html += horseTableCardHtml();
+  }
+  if(state.horses.length >= 2){
+    html += simSettingsCardHtml();
+  }
+  if(state.simResults){
+    html += resultsHtml();
+  }
+  document.getElementById("app").innerHTML = html;
+}
+
+render();
+</script>
+</body>
+</html>
