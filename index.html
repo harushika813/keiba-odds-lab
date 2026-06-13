@@ -281,6 +281,15 @@ function comboListHtml(entries, horses, ordered){
 }
 
 // ---------- データ操作 ----------
+function resetHorses(){
+  state.horses = [];
+  state.raceName = "";
+  state.trackCondition = "不明";
+  state.simResults = null;
+  state.raceOrder = null;
+  render();
+}
+
 function genId(){ return Date.now() + Math.random(); }
 
 function addHorse(){
@@ -396,24 +405,68 @@ function applyParsedJson(rawText){
   const parsed = JSON.parse(clean);
 
   const paddockSet = new Set((parsed.paddockPicks||[]).map(Number));
-  const newHorses = (parsed.horses||[]).map((h,i)=>({
-    id: genId(),
+  const parsedHorses = (parsed.horses||[]).map((h,i)=>({
     number: Number(h.number) || i+1,
     name: h.name || `${i+1}番`,
     frameNumber: Number(h.frameNumber) > 0 ? Number(h.frameNumber) : null,
     jockey: h.jockey || "",
     jockeyRating: ["得意","普通","不得意"].includes(h.jockeyRating) ? h.jockeyRating : "普通",
-    odds: Number(h.odds)>0 ? Number(h.odds) : 10,
-    finalOdds: null,
+    odds: Number(h.odds)>0 ? Number(h.odds) : null,
     popularity: h.popularity!=null ? Number(h.popularity) : null,
-    aptitude: "普通",
-    paddock: paddockSet.has(Number(h.number)),
   }));
-  if(newHorses.length===0) throw new Error("horsesが空です。出走馬データが含まれていません。");
+  if(parsedHorses.length===0) throw new Error("horsesが空です。出走馬データが含まれていません。");
 
-  state.raceName = parsed.raceName || "";
-  if(TRACK_CONDITIONS.includes(parsed.trackCondition)) state.trackCondition = parsed.trackCondition;
-  state.horses = newHorses;
+  if(TRACK_CONDITIONS.includes(parsed.trackCondition) && state.trackCondition === "不明"){
+    state.trackCondition = parsed.trackCondition;
+  }
+  if(parsed.raceName && !state.raceName) state.raceName = parsed.raceName;
+
+  if(state.horses.length === 0){
+    // 初回読み込み: そのまま新規一覧として登録
+    state.horses = parsedHorses.map(h => ({
+      id: genId(),
+      number: h.number,
+      name: h.name,
+      frameNumber: h.frameNumber,
+      jockey: h.jockey,
+      jockeyRating: h.jockeyRating,
+      odds: h.odds ?? 10,
+      finalOdds: null,
+      popularity: h.popularity,
+      aptitude: "普通",
+      paddock: paddockSet.has(h.number),
+    }));
+  } else {
+    // 2枚目以降: 馬番で既存の一覧と照合し、直前オッズなどを更新（既存の編集内容は保持）
+    parsedHorses.forEach(ph => {
+      const existing = state.horses.find(x => x.number === ph.number);
+      if(existing){
+        if(ph.odds != null){
+          // 既存の単勝オッズと異なる値なら「直前オッズ」として反映
+          if(ph.odds !== existing.odds) existing.finalOdds = ph.odds;
+        }
+        if(!existing.frameNumber && ph.frameNumber) existing.frameNumber = ph.frameNumber;
+        if(!existing.jockey && ph.jockey) existing.jockey = ph.jockey;
+        if(ph.popularity != null) existing.popularity = ph.popularity;
+        if(paddockSet.has(ph.number)) existing.paddock = true;
+      } else {
+        // 一覧に無い馬番は新規追加
+        state.horses.push({
+          id: genId(),
+          number: ph.number,
+          name: ph.name,
+          frameNumber: ph.frameNumber,
+          jockey: ph.jockey,
+          jockeyRating: ph.jockeyRating,
+          odds: ph.odds ?? 10,
+          finalOdds: null,
+          popularity: ph.popularity,
+          aptitude: "普通",
+          paddock: paddockSet.has(ph.number),
+        });
+      }
+    });
+  }
   state.simResults = null;
 }
 
@@ -551,6 +604,10 @@ function inputCardHtml(){
     ${body}
     ${state.error ? `<div class="error-box">${state.error}</div>` : ""}
     <p class="note">または、下の「出走馬一覧」の「馬を追加」から1頭ずつ手入力することもできます。</p>
+    ${state.horses.length > 0 ? `
+    <p class="note">出走馬が既にある状態で画像を解析すると、馬番で照合して「直前オッズ」などを上書き更新します（適性・パドック等の編集内容は維持）。新しいレースを始める場合は下のボタンで一覧をクリアしてください。</p>
+    <button class="btn-ghost" onclick="resetHorses()">出走馬一覧をクリア（新しいレース）</button>
+    ` : ""}
   </div>`;
 }
 
