@@ -43,6 +43,7 @@
   .chip.active{background:var(--accent);color:#1A1505;border-color:var(--accent);}
   .row{display:flex;gap:8px;}
   .row > *{flex:1;}
+  #budgetInput{flex:0 0 90px;text-align:right;}
   .bar-row{display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:6px;}
   .bar-label{width:96px;color:var(--sub);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .bar-track{flex:1;background:#0F141E;border-radius:4px;height:14px;overflow:hidden;}
@@ -123,15 +124,23 @@ let state = {
   numSim: 10000,
   simResults: null,
   raceOrder: null,
+  racePhaseLabel: "",
+  budget: 1000,
 };
 
 // ---------- モンテカルロ ----------
 function gumbel(){ const u = Math.random(); return -Math.log(-Math.log(u || 1e-12)); }
 
-function computeStrengths(horses, trackCondition){
+// 各馬の「1着になりやすさ」と「2着以降も粘りやすさ」を別々に算出
+// 単勝オッズ→勝率推定値、複勝オッズ→3着以内率推定値とし、
+// その比率から「1着向き(逃げ切り・一発型)」か「3着内向き(堅実型)」かを判定して補正する
+function computeStrengthPair(horses, trackCondition){
   const condKey = APTITUDE_FACTOR[trackCondition] ? trackCondition : "不明";
   const factorTable = APTITUDE_FACTOR[condKey];
-  const strengths = horses.map(h => {
+  const m = horses.length;
+  const placeRankCount = m <= 7 ? 2 : 3;
+
+  const baseStrengths = horses.map(h => {
     const oddsForSim = (h.finalOdds && h.finalOdds > 0) ? h.finalOdds : h.odds;
     let s = 1 / Math.max(oddsForSim, 0.1);
     s *= (factorTable[h.aptitude] ?? 1.0);
@@ -139,8 +148,38 @@ function computeStrengths(horses, trackCondition){
     if (h.paddock) s *= 1.1;
     return s;
   });
-  const total = strengths.reduce((a,b)=>a+b,0);
-  return strengths.map(s => Math.log(s/total));
+
+  // 単勝オッズ・複勝オッズそれぞれから粗い確率を推定（合計1に正規化）
+  const winProbRaw = baseStrengths.map(s => s);
+  const winTotal = winProbRaw.reduce((a,b)=>a+b,0);
+  const winProb = winProbRaw.map(s => s/winTotal);
+
+  const placeProbRaw = horses.map((h,i) => {
+    if(h.placeOdds && h.placeOdds > 0){
+      return 1 / Math.max(h.placeOdds, 0.1);
+    }
+    return baseStrengths[i]; // 複勝オッズが無い馬は単勝ベースのまま
+  });
+  const placeTotal = placeProbRaw.reduce((a,b)=>a+b,0);
+  // 複勝率はplaceRankCount頭が該当するので、合計がplaceRankCountになるよう正規化
+  const placeProb = placeProbRaw.map(s => (s/placeTotal) * placeRankCount);
+
+  // 「3着内率 / 勝率」が大きいほど堅実型（一発力より安定感）、小さいほど一発型
+  // この比率に応じてwin/placeそれぞれの強さを増減させる
+  const winStrength = baseStrengths.map((s,i) => {
+    const ratio = (placeProb[i] > 0 && winProb[i] > 0) ? (placeProb[i]/winProb[i]) : placeRankCount;
+    // ratioが大きい(堅実型)ほどwin方向を少し下げ、小さい(一発型)ほど上げる
+    const adj = Math.pow(placeRankCount/Math.max(ratio,0.01), 0.25);
+    return s * adj;
+  });
+  const placeStrength = baseStrengths.map((s,i) => {
+    const ratio = (placeProb[i] > 0 && winProb[i] > 0) ? (placeProb[i]/winProb[i]) : placeRankCount;
+    // ratioが大きい(堅実型)ほどplace方向を少し上げる
+    const adj = Math.pow(ratio/placeRankCount, 0.25);
+    return s * adj;
+  });
+
+  return { winStrength, placeStrength, placeRankCount };
 }
 
 function getCleanedHorses(){
@@ -151,46 +190,95 @@ function getCleanedHorses(){
   }));
 }
 
-function sampleOneOrder(){
+// シミュレーション結果から「最も期待値が高い」予想決着順を算出
+// 1) 三連単の最頻出パターンがあればそれを先頭3頭に採用
+// 2) 残りの馬は平均着順(rankSum/n)が小さい順に並べる
+function getExpectedOrder(){
   const horses = getCleanedHorses();
-  const logS = computeStrengths(horses, state.trackCondition);
-  const arr = horses.map((_,idx)=>({idx, key: logS[idx] + gumbel()}));
-  arr.sort((a,b)=>b.key-a.key);
-  return arr.map(x=>x.idx);
+  const m = horses.length;
+  if(state.simResults){
+    const sr = state.simResults;
+    const order = [];
+    if(m>=3){
+      const top = topEntries(sr.trifecta, sr.n, 1)[0];
+      if(top) top.key.split("-").map(Number).forEach(idx=>order.push(idx));
+    } else if(m===2){
+      const top = topEntries(sr.exacta, sr.n, 1)[0];
+      if(top) top.key.split("-").map(Number).forEach(idx=>order.push(idx));
+    }
+    const avgRank = horses.map((_,i)=> sr.rankSum[i]/sr.n);
+    const rest = horses.map((_,i)=>i).filter(i=>!order.includes(i))
+      .sort((a,b)=>avgRank[a]-avgRank[b]);
+    return [...order, ...rest];
+  }
+  // シミュレーション未実行の場合は強さの推定値で代用
+  const { winStrength } = computeStrengthPair(horses, state.trackCondition);
+  return horses.map((_,i)=>i).sort((a,b)=>winStrength[b]-winStrength[a]);
 }
+
+// レース全体を「スタート→道中→直線→ゴール前(スロー)」の4フェーズで再現する
+// 各フェーズの所要フレーム数・1フレームあたりの間隔(ms)を変えることで
+// ゴール前だけゆっくり見せる
+const RACE_PHASES = [
+  { name:"スタート",   frames:10, intervalMs:35, to:0.30 },
+  { name:"道中",       frames:14, intervalMs:35, to:0.62 },
+  { name:"直線",       frames:14, intervalMs:55, to:0.85 },
+  { name:"ゴール前",   frames:16, intervalMs:110, to:1.00 },
+];
 
 function playRaceAnimation(){
   if(state.horses.length < 2) return;
-  const order = sampleOneOrder();
+  const order = getExpectedOrder();
   const m = state.horses.length;
   const spread = Math.min(22, 4 + m * 2);
   const finishPct = {};
   order.forEach((idx,rank)=>{ finishPct[idx] = 96 - rank * (spread/Math.max(m-1,1)); });
 
   state.raceOrder = null;
+  state.racePhaseLabel = "";
   render();
 
-  const numFrames = 36;
-  const intervalMs = 70;
   const phases = state.horses.map(()=>Math.random()*Math.PI*2);
   const amps = state.horses.map(()=>4+Math.random()*6);
+
+  let phaseIdx = 0;
   let frame = 0;
-  const timer = setInterval(()=>{
+  let fromT = 0;
+
+  function step(){
+    const phase = RACE_PHASES[phaseIdx];
     frame++;
-    const t = frame/numFrames;
+    const localT = frame/phase.frames;
+    const t = fromT + (phase.to - fromT) * localT;
+
+    const labelEl = document.getElementById("racePhaseLabel");
+    if(labelEl) labelEl.textContent = phase.name;
+
     state.horses.forEach((h,idx)=>{
       const base = t * finishPct[idx];
-      const jitter = amps[idx] * (1-t) * Math.sin(phases[idx] + t*10);
+      // フェーズが進むほど横のブレ(jitter)は収束させる
+      const jitterScale = phase.name === "ゴール前" ? (1-t)*0.4 : (1-t);
+      const jitter = amps[idx] * jitterScale * Math.sin(phases[idx] + t*10);
       const pos = Math.max(0, Math.min(98, base + jitter));
       const el = document.getElementById(`pos-${h.id}`);
       if(el) el.style.left = pos + "%";
     });
-    if(frame >= numFrames){
-      clearInterval(timer);
-      state.raceOrder = order;
-      render();
+
+    if(frame >= phase.frames){
+      fromT = phase.to;
+      frame = 0;
+      phaseIdx++;
+      if(phaseIdx >= RACE_PHASES.length){
+        state.raceOrder = order;
+        const labelEl2 = document.getElementById("racePhaseLabel");
+        if(labelEl2) labelEl2.textContent = "ゴール";
+        render();
+        return;
+      }
     }
-  }, intervalMs);
+    setTimeout(step, RACE_PHASES[phaseIdx].intervalMs);
+  }
+  setTimeout(step, RACE_PHASES[0].intervalMs);
 }
 
 function raceAnimationCardHtml(){
@@ -217,30 +305,63 @@ function raceAnimationCardHtml(){
     `</div>`;
   }
 
+  const phaseNote = state.simResults
+    ? "シミュレーション結果のうち最も可能性が高い決着パターン（三連単本線＋平均着順）に基づく再現です。"
+    : "まだシミュレーションを実行していないため、現在のオッズ等から推定した期待値ベースの順序で再現しています。「レースを◯回走らせる」を実行すると、その結果に基づいた決着順になります。";
+
   return `
   <div class="card">
     <div class="card-title">レース再現アニメーション</div>
     <div class="lanes">${lanes}</div>
-    <button class="btn" style="margin-top:10px" onclick="playRaceAnimation()">▶ 1レース再生</button>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <button class="btn" onclick="playRaceAnimation()">▶ レースを再現する</button>
+      <div style="flex:0 0 auto;width:80px;text-align:center;font-size:12px;color:var(--accent);font-weight:700" id="racePhaseLabel"></div>
+    </div>
     ${resultHtml}
-    <p class="note">毎回ランダムに1レース分だけ抜き出して再生するイメージ表示です。実際の確率は「単勝勝率」や「三連単」などの集計結果を参考にしてください。</p>
+    <p class="note">${phaseNote} スタート〜道中は速いペースで流し、直線・ゴール前は徐々にスローにして決着の様子を見やすくしています。</p>
   </div>`;
+}
+
+function drawOneOrder(winStrength, placeStrength){
+  const m = winStrength.length;
+  const remaining = Array.from({length:m}, (_,i)=>i);
+  const order = [];
+
+  // 1着: winStrengthベースでGumbel-max
+  {
+    let best=-1, bestKey=-Infinity;
+    remaining.forEach(idx=>{
+      const key = Math.log(winStrength[idx]) + gumbel();
+      if(key>bestKey){ bestKey=key; best=idx; }
+    });
+    order.push(best);
+    remaining.splice(remaining.indexOf(best),1);
+  }
+  // 2着以降: placeStrengthベースでGumbel-max（逐次抽出）
+  while(remaining.length>0){
+    let best=-1, bestKey=-Infinity;
+    remaining.forEach(idx=>{
+      const key = Math.log(placeStrength[idx]) + gumbel();
+      if(key>bestKey){ bestKey=key; best=idx; }
+    });
+    order.push(best);
+    remaining.splice(remaining.indexOf(best),1);
+  }
+  return order;
 }
 
 function runMonteCarlo(horses, n, trackCondition){
   const m = horses.length;
-  const logS = computeStrengths(horses, trackCondition);
+  const { winStrength, placeStrength, placeRankCount } = computeStrengthPair(horses, trackCondition);
 
-  const placeRank = m <= 7 ? 2 : 3;
+  const placeRank = placeRankCount;
   const winCount = new Array(m).fill(0);
   const placeCount = new Array(m).fill(0);
   const rankSum = new Array(m).fill(0);
   const quinella = new Map(), exacta = new Map(), wide = new Map(), trio = new Map(), trifecta = new Map();
 
   for (let i=0;i<n;i++){
-    const arr = horses.map((_,idx)=>({idx, key: logS[idx] + gumbel()}));
-    arr.sort((a,b)=>b.key-a.key);
-    const order = arr.map(x=>x.idx);
+    const order = drawOneOrder(winStrength, placeStrength);
 
     winCount[order[0]]++;
     for(let r=0;r<placeRank;r++) placeCount[order[r]]++;
@@ -293,7 +414,7 @@ function resetHorses(){
 function genId(){ return Date.now() + Math.random(); }
 
 function addHorse(){
-  state.horses.push({id:genId(), number: state.horses.length+1, name:"", odds:10, finalOdds:null, popularity:null, frameNumber:null, jockey:"", jockeyRating:"普通", aptitude:"普通", paddock:false});
+  state.horses.push({id:genId(), number: state.horses.length+1, name:"", odds:10, finalOdds:null, placeOdds:null, popularity:null, frameNumber:null, jockey:"", jockeyRating:"普通", aptitude:"普通", paddock:false});
   render();
 }
 function removeHorse(id){
@@ -304,7 +425,7 @@ function updateHorseField(id, field, value, numeric){
   const h = state.horses.find(x=>x.id===id);
   if(!h) return;
   if(numeric){
-    h[field] = value==="" ? (field==="finalOdds"||field==="popularity"||field==="frameNumber" ? null : 0) : Number(value);
+    h[field] = value==="" ? (field==="finalOdds"||field==="popularity"||field==="frameNumber"||field==="placeOdds" ? null : 0) : Number(value);
   } else {
     h[field] = value;
   }
@@ -356,7 +477,7 @@ function parseQuickText(){
       const number = Number(parts[0]) || (i+1);
       const name = (parts[1] || "").trim() || `${i+1}番`;
       const odds = Number(parts[2]) > 0 ? Number(parts[2]) : 10;
-      newHorses.push({ id: genId(), number, name, odds, finalOdds:null, popularity:null, frameNumber:null, jockey:"", jockeyRating:"普通", aptitude:"普通", paddock:false });
+      newHorses.push({ id: genId(), number, name, odds, finalOdds:null, placeOdds:null, popularity:null, frameNumber:null, jockey:"", jockeyRating:"普通", aptitude:"普通", paddock:false });
       return;
     }
 
@@ -378,6 +499,7 @@ function parseQuickText(){
       name,
       odds,
       finalOdds: null,
+      placeOdds: null,
       popularity: null,
       frameNumber: null,
       jockey: "",
@@ -412,6 +534,7 @@ function applyParsedJson(rawText){
     jockey: h.jockey || "",
     jockeyRating: ["得意","普通","不得意"].includes(h.jockeyRating) ? h.jockeyRating : "普通",
     odds: Number(h.odds)>0 ? Number(h.odds) : null,
+    placeOdds: Number(h.placeOdds)>0 ? Number(h.placeOdds) : null,
     popularity: h.popularity!=null ? Number(h.popularity) : null,
   }));
   if(parsedHorses.length===0) throw new Error("horsesが空です。出走馬データが含まれていません。");
@@ -432,6 +555,7 @@ function applyParsedJson(rawText){
       jockeyRating: h.jockeyRating,
       odds: h.odds ?? 10,
       finalOdds: null,
+      placeOdds: h.placeOdds,
       popularity: h.popularity,
       aptitude: "普通",
       paddock: paddockSet.has(h.number),
@@ -445,6 +569,7 @@ function applyParsedJson(rawText){
           // 既存の単勝オッズと異なる値なら「直前オッズ」として反映
           if(ph.odds !== existing.odds) existing.finalOdds = ph.odds;
         }
+        if(ph.placeOdds != null) existing.placeOdds = ph.placeOdds;
         if(!existing.frameNumber && ph.frameNumber) existing.frameNumber = ph.frameNumber;
         if(!existing.jockey && ph.jockey) existing.jockey = ph.jockey;
         if(ph.popularity != null) existing.popularity = ph.popularity;
@@ -460,6 +585,7 @@ function applyParsedJson(rawText){
           jockeyRating: ph.jockeyRating,
           odds: ph.odds ?? 10,
           finalOdds: null,
+          placeOdds: ph.placeOdds,
           popularity: ph.popularity,
           aptitude: "普通",
           paddock: paddockSet.has(ph.number),
@@ -639,6 +765,7 @@ function horseTableCardHtml(){
       </td>
       <td><input class="odds-in" type="number" step="0.1" value="${h.odds}" oninput="updateHorseField(${h.id},'odds',this.value,true)"/></td>
       <td><input class="odds-in" type="number" step="0.1" placeholder="—" value="${h.finalOdds ?? ''}" oninput="updateHorseField(${h.id},'finalOdds',this.value,true)"/></td>
+      <td><input class="odds-in" type="number" step="0.1" placeholder="—" value="${h.placeOdds ?? ''}" oninput="updateHorseField(${h.id},'placeOdds',this.value,true)"/></td>
       <td>
         <select class="sel-in" onchange="setAptitude(${h.id},this.value)">
           <option value="得意" ${h.aptitude==='得意'?'selected':''}>得意</option>
@@ -655,11 +782,11 @@ function horseTableCardHtml(){
     <div class="card-title">出走馬一覧（編集可）</div>
     <div class="overflow">
       <table>
-        <thead><tr><th>馬番</th><th>枠</th><th>馬名</th><th>騎手/評価</th><th>単勝</th><th>直前</th><th>馬場適性</th><th style="text-align:center">パド</th><th></th></tr></thead>
+        <thead><tr><th>馬番</th><th>枠</th><th>馬名</th><th>騎手/評価</th><th>単勝</th><th>直前</th><th>複勝</th><th>馬場適性</th><th style="text-align:center">パド</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p class="note">「騎手/評価」は、画像解析時にClaudeの一般知識（最新の成績データではない）から初期値を提案します。ご自身の判断で「得意・普通・不得意」を調整すると、実力値を±10%補正します。直前オッズが入力されている馬はそちらをシミュレーションに使用します。★（パドック推奨）はクリックでON/OFF、実力値を+10%補正します。</p>
+    <p class="note">「騎手/評価」は、画像解析時にClaudeの一般知識（最新の成績データではない）から初期値を提案します。ご自身の判断で「得意・普通・不得意」を調整すると、実力値を±10%補正します。直前オッズが入力されている馬はそちらをシミュレーションに使用します。「複勝」オッズを入力すると、単勝オッズとの比率から「1着向き（一発型）」か「3着内向き（堅実型）」かを判定し、1着率・3着内率にそれぞれ反映します。★（パドック推奨）はクリックでON/OFF、実力値を+10%補正します。</p>
     <button class="btn-ghost" onclick="addHorse()">＋ 馬を追加</button>
   </div>`;
 }
@@ -673,6 +800,155 @@ function simSettingsCardHtml(){
     <div class="card-title">シミュレーション設定</div>
     <div class="chip-row" style="margin-bottom:12px">${chips}</div>
     <button class="btn" onclick="runSim()">▶ レースを${state.numSim.toLocaleString()}回走らせる</button>
+  </div>`;
+}
+
+// ---------- 買い目推奨エンジン ----------
+// 各式別について「的中率 × 推定配当」で期待値(EV)を算出し、最もEVが高い式別・買い目を選ぶ。
+// 配当はオッズが分かる単勝・複勝は直接利用。馬連等は単勝オッズから簡易推定する。
+const PLACE_PAYOUT_FACTOR = 0.30; // 複勝の配当は単勝オッズの概ね2〜4割程度という粗い経験則
+const COMBO_BASE_PAYOUT = {
+  quinella: 0.8,   // 馬連: 単勝オッズ積のざっくり係数
+  exacta: 1.0,     // 馬単
+  wide: 0.25,      // ワイド
+  trio: 0.5,       // 三連複
+  trifecta: 1.2,   // 三連単
+};
+
+function estimateComboPayout(type, idxs, horses){
+  const oddsOf = (i) => (horses[i].finalOdds && horses[i].finalOdds>0) ? horses[i].finalOdds : horses[i].odds;
+  const product = idxs.reduce((acc,i)=>acc*Math.max(oddsOf(i),1.1), 1);
+  const factor = COMBO_BASE_PAYOUT[type] ?? 0.5;
+  // 組み合わせ数が多いほど(=的中率が高いほど)配当は下がるはず、というのを
+  // すでに的中率に反映しているため、ここではオッズ積×係数のみで簡易推定
+  return Math.max(product * factor, 1.1);
+}
+
+function buildBetCandidates(){
+  const sr = state.simResults;
+  const horses = state.horses;
+  if(!sr) return [];
+
+  const candidates = [];
+
+  // 単勝
+  horses.forEach((h,i)=>{
+    const p = sr.winCount[i]/sr.n;
+    const odds = (h.finalOdds && h.finalOdds>0) ? h.finalOdds : h.odds;
+    candidates.push({
+      type:"単勝", typeKey:"win", idxs:[i], prob:p, payout:odds,
+      ev: p*odds,
+      label: `${badge(h)} ${h.name}`,
+    });
+  });
+
+  // 複勝
+  horses.forEach((h,i)=>{
+    const p = sr.placeCount[i]/sr.n;
+    let odds;
+    if(h.placeOdds && h.placeOdds>0){
+      odds = h.placeOdds;
+    } else {
+      const winOdds = (h.finalOdds && h.finalOdds>0) ? h.finalOdds : h.odds;
+      odds = Math.max(1.05, winOdds * PLACE_PAYOUT_FACTOR);
+    }
+    candidates.push({
+      type:"複勝", typeKey:"place", idxs:[i], prob:p, payout:odds,
+      ev: p*odds,
+      label: `${badge(h)} ${h.name}`,
+    });
+  });
+
+  // 馬連・馬単・ワイド・三連複・三連単
+  const comboDefs = [
+    {map: sr.quinella, type:"馬連", typeKey:"quinella", ordered:false},
+    {map: sr.exacta,   type:"馬単", typeKey:"exacta",   ordered:true},
+    {map: sr.wide,     type:"ワイド", typeKey:"wide",   ordered:false},
+    {map: sr.trio,     type:"三連複", typeKey:"trio",   ordered:false},
+    {map: sr.trifecta, type:"三連単", typeKey:"trifecta", ordered:true},
+  ];
+  comboDefs.forEach(def=>{
+    if(!def.map) return;
+    topEntries(def.map, sr.n, 5).forEach(e=>{
+      const idxs = e.key.split("-").map(Number);
+      const p = e.prob/100;
+      const payout = estimateComboPayout(def.typeKey, idxs, horses);
+      const badges = idxs.map((idx,j)=> badge(horses[idx]) + (j<idxs.length-1?`<span class="combo-sep">${def.ordered?"→":"-"}</span>`:"")).join("");
+      candidates.push({
+        type: def.type, typeKey: def.typeKey, idxs, prob:p, payout,
+        ev: p*payout,
+        label: `<div class="combo-badges" style="display:inline-flex">${badges}</div>`,
+      });
+    });
+  });
+
+  return candidates;
+}
+
+// 予算内で「EVが高い順」に買い目を配分する。
+// 1点あたりの賭け金は100円単位に丸め、各的中率に応じて予算を比例配分しつつ
+// 100円未満は切り上げる簡易ロジック。
+function recommendBets(budget){
+  const candidates = buildBetCandidates();
+  if(candidates.length === 0) return [];
+
+  const sorted = [...candidates].sort((a,b)=> b.ev - a.ev);
+  const picked = sorted.slice(0, Math.min(3, sorted.length)).filter(c=>c.ev > 0);
+  if(picked.length === 0) return [];
+
+  const totalEv = picked.reduce((a,c)=>a+c.ev,0);
+  let remaining = budget;
+  const results = picked.map((c,i)=>{
+    let amount;
+    if(i === picked.length-1){
+      amount = remaining;
+    } else {
+      amount = Math.floor((budget * (c.ev/totalEv)) / 100) * 100;
+      amount = Math.max(amount, 100);
+      amount = Math.min(amount, remaining);
+    }
+    remaining -= amount;
+    return { ...c, amount, expectedReturn: amount * c.payout };
+  }).filter(c=>c.amount > 0);
+
+  return results;
+}
+
+function setBudget(val){
+  const n = Number(val);
+  state.budget = (n > 0) ? n : 0;
+  render();
+}
+
+function betRecommendationCardHtml(){
+  if(!state.simResults) return "";
+  const bets = recommendBets(state.budget);
+  if(bets.length === 0) return "";
+
+  const totalAmount = bets.reduce((a,b)=>a+b.amount,0);
+  const totalReturn = bets.reduce((a,b)=>a+b.expectedReturn,0);
+  const totalEvRatio = totalAmount>0 ? totalReturn/totalAmount : 0;
+
+  const rows = bets.map(b=>`
+    <div class="combo-row">
+      <span class="combo-idx" style="width:auto;min-width:48px">${b.type}</span>
+      <div class="combo-badges">${b.label}</div>
+      <span class="combo-prob" style="text-align:right">${(b.prob*100).toFixed(1)}% / ${b.payout.toFixed(1)}倍</span>
+    </div>
+    <div class="note" style="margin:0 0 8px;text-align:right">賭け金 ¥${b.amount.toLocaleString()} → 期待配当 約¥${Math.round(b.expectedReturn).toLocaleString()}</div>
+  `).join("");
+
+  return `
+  <div class="card">
+    <div class="card-title">予算内おすすめ買い目</div>
+    <div class="row" style="margin-bottom:10px;align-items:center">
+      <span class="note" style="margin:0">予算</span>
+      <input id="budgetInput" type="number" step="100" min="100" value="${state.budget}" oninput="setBudget(this.value)" style="text-align:right"/>
+      <span class="note" style="margin:0">円</span>
+    </div>
+    ${rows}
+    <div class="led" style="margin-top:6px">総額 ¥${totalAmount.toLocaleString()} / 期待値合計 ${totalEvRatio.toFixed(2)}倍</div>
+    <p class="note">単勝・複勝・馬連・馬単・ワイド・三連複・三連単すべての候補から、シミュレーション確率×推定配当で期待値(EV)が高いものを最大3点選び、予算を比例配分しています。複勝・組み合わせ系の配当はオッズが無い場合の推定値（実際の配当とは異なります）。期待値1.0倍未満でも「最も損失が小さい」候補として表示される場合があります。</p>
   </div>`;
 }
 
@@ -758,6 +1034,8 @@ function resultsHtml(){
     <div class="note">${conclusionExtra}</div>
   </div>
 
+  ${betRecommendationCardHtml()}
+
   <div class="card">
     <div class="card-title">予想決着順（平均着順ベース）</div>
     <div class="predicted-grid">${predictedHtml}</div>
@@ -788,7 +1066,7 @@ function resultsHtml(){
   ${exoticHtml}
 
   <div class="card">
-    <p class="note">本シミュレーションは各馬のオッズ（直前オッズ優先）から推定した実力値に、馬場状態×適性・パドック評価による補正、さらに毎回ランダムなブレ（展開・状態など）を加えてレースを多数回再現するモンテカルロ法（Plackett-Luce/Gumbel法）に基づいています。各買い目の確率は実際の的中率を保証するものではなく、参考情報としてご活用ください。賭けはご自身の判断と責任で、無理のない範囲で楽しんでください。</p>
+    <p class="note">本シミュレーションは各馬のオッズ（直前オッズ優先）から推定した実力値に、馬場状態×適性・騎手評価・パドック評価による補正、さらに複勝オッズがあれば単勝とのギャップから「1着向き／3着内向き」の傾向を反映し、毎回ランダムなブレ（展開・状態など）を加えてレースを多数回再現するモンテカルロ法（逐次Plackett-Luce/Gumbel法）に基づいています。各買い目の確率は実際の的中率を保証するものではなく、参考情報としてご活用ください。賭けはご自身の判断と責任で、無理のない範囲で楽しんでください。</p>
   </div>`;
 }
 
